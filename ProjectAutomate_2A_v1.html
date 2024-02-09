@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Pump Control Interface</title>
+    <style>
+        /* Styling for the page, including font size and table formatting */
+        body {
+            font-size: 20px;
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        .page-container {
+            display: flex;
+            flex-wrap: nowrap; /* Prevent wrapping to a new line */
+            justify-content: space-between; /* This will add space between the two columns */
+        }
+        
+        .controls-container {
+            width: 40%; /* Set the width of controls container to 40% */
+            /* If you want to ensure that the content does not exceed the bounds even with padding or border, use box-sizing */
+            box-sizing: border-box;
+        }
+        
+        .results-container {
+            width: 60%; /* Set the width of results container to 60% */
+            /* Same box-sizing property for consistent width calculation */
+            box-sizing: border-box;
+        }
+
+        button, input, label, span {
+            font-size: 18px;
+            padding: 5px;
+            margin: 5px;
+        }
+
+        input[type=range] {
+            vertical-align: middle;
+            margin-right: 10px;
+            width: 100%; /* Make the slider take up the full width of its container */
+        }
+
+        table {
+            width: 100%; /* Make the table take up the full width of its container */
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+
+        th, td {
+            border: 1px solid black;
+            padding: 5px;
+            font-size: 16px;
+            text-align: center;
+        }
+
+        #resultsTable {
+            width: 100%;
+            max-width: 100%;
+            table-layout: fixed; /* This ensures that the table respects the width of its container */
+        }
+
+        #statusOutput{
+            margin-top: 10px;
+        }
+
+        #progressOutput{
+            font-size: 40px;
+            font-weight: bold;
+            margin-top: 10px;
+            text-align: center;
+        }
+
+        #progressContainer {
+            display: none; /* Initially hide the progress container */
+            width: 100%;
+            background-color: #ddd;
+        }
+
+        .slider-container {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .slider-container > label {
+            margin-right: 5px; /* Adjust as necessary for spacing */
+        }
+        
+        .slider-container > span {
+            min-width: 50px; /* Ensure the span does not shrink, adjust as needed */
+            text-align: right;
+        }
+        
+        .full-width-slider {
+            flex: 1; /* Allow the slider to grow and fill the available space */
+        }
+
+    </style>
+</head>
+<body>
+    <div class="page-container">
+        <div class="column test-controls">
+            <h3>GreaseBoss Pump Control Interface</h3>
+            <div>Designed for Greaseboss by ProxiTech</div>
+            <div>ProxiTech: Oscar Lloyd</div>
+            <div>GreaseBoss: Peter, Andrew </div><br>
+        
+            <button id="connect">Connect</button>
+            <button id="disconnect" disabled>Disconnect</button><br><br>
+        
+            <label for="directionToggle">Direction:</label>
+            <button id="directionToggle">Forward</button><br><br>
+        
+            <div class="slider-container">
+                <label for="speedInput">Speed:</label>
+                <span id="speedValue" style="width: 30px; display: inline-block; text-align: left;">20%</span>
+                <button id="decreaseSpeed">-</button>
+                <input id="speedInput" type="range" value="20" min="0" max="100" oninput="updateSpeedValue(this.value)" class="full-width-slider">
+                <button id="increaseSpeed">+</button>
+            </div><br>
+        
+            <label for="kInput">K-Factor:</label>
+            <input id="kInput" type="number" value="0.08969" min="0" step="0.0000001"><br><br>
+        
+            <label for="flowInput">Test Volume (cc):</label>
+            <input id="flowInput" type="number" value="10" min="1"><br><br>
+        
+            <button id="playButton">Play</button>
+            <button id="pauseButton">Pause</button>
+            <button id="stopButton">Stop</button>
+        </div>
+        <div class="column results-container">
+            <h3>Test Progress</h3>
+            <div id="statusOutput"></div><br>
+            <div id="progressOutput"></div>
+            <div id="progressContainer">
+                <div id="progressBar" style="width: 0%; height: 20px; background-color: #4CAF50;"></div>
+              </div>
+        
+            <h3>Test Results</h3>
+            <button id="toggleRecording">Recording Test</button>
+            <button id="exportButton">Export Results</button>
+            <table id="resultsTable">
+                <tr>
+                    <th>Test No.</th>
+                    <th>Direction</th>
+                    <th>Speed (%)</th>
+                    <th>K-Factor</th>
+                    <th>Pulses</th>
+                    <th>Volume (cc)</th>
+                    <th>Time (s)</th>
+                </tr>
+            </table>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        // Global variables for serial communication and control states
+        let port;
+        let reader;
+        let writer;
+        let keepReading = true;
+        let testNumber = 0;
+        let awaitingDisconnectConfirmation = false;
+        let isRecordingEnabled = true;
+        let state = "INACTIVE";
+
+        let lastText = '';
+
+        // Initially disable control buttons until a connection is established
+        document.getElementById('playButton').disabled = true;
+        document.getElementById('pauseButton').disabled = true;
+        document.getElementById('stopButton').disabled = true;
+        
+        document.getElementById('increaseSpeed').addEventListener('click', increaseSpeed);
+        document.getElementById('decreaseSpeed').addEventListener('click', decreaseSpeed);
+        document.getElementById('exportButton').addEventListener('click', exportTableToCSV);
+        document.getElementById('progressContainer').style.display = 'none';
+
+        // Event listeners for user interactions
+        document.getElementById('connect').addEventListener('click', async () => {
+            await connectSerial();
+            state = "IDLE";
+        });
+    
+        document.getElementById('disconnect').addEventListener('click', async () => {
+            keepReading = false; // Signal to stop reading from serial
+            await disconnectSerial();
+            state = "INACTIVE";
+        });
+
+        document.getElementById('directionToggle').addEventListener('click', () => {
+            toggleDirection();
+        });
+
+        document.getElementById('playButton').addEventListener('click', async () => {
+            await sendPlayCommand();
+            state = "PLAY";
+        });
+
+        document.getElementById('pauseButton').addEventListener('click', async () => {
+            await sendPauseCommand();
+            state = "PAUSE";
+        });
+
+        document.getElementById('stopButton').addEventListener('click', async () => {
+            await sendStopCommand();
+            state = "IDLE";
+        });
+
+        document.addEventListener('DOMContentLoaded', (event) => {
+            const speedInput = document.getElementById('speedInput');
+            updateSpeedValue(speedInput.value); // Set the slider to the correct position based on its value
+        });
+
+        document.getElementById('toggleRecording').addEventListener('click', function() {
+            isRecordingEnabled = !isRecordingEnabled; // Toggle the recording state
+            this.textContent = isRecordingEnabled ? "Recording Test" : "Ignoring Test"; // Update button text
+        });
+
+        
+        // Function to establish a serial connection and begin reading
+        async function connectSerial() {
+            if ('serial' in navigator) {
+                try {
+                    port = await navigator.serial.requestPort();
+                    await port.open({ baudRate: 9600 });
+        
+                    keepReading = true; // Ensure keepReading is true when starting a new connection
+        
+                    // Delay to allow Arduino to reset after opening the serial connection
+                    setTimeout(async () => {
+                        try {
+                            writer = port.writable.getWriter();
+                            await writer.write(new TextEncoder().encode('c\n')); // Send 'c' command after delay
+                            writer.releaseLock();
+                            writer = null; // Clear the writer to recreate it next time
+                            document.getElementById('disconnect').disabled = false;
+                            document.getElementById('connect').disabled = true;
+                            document.getElementById('playButton').disabled = false;
+                            // Start reading from the serial port
+                            readSerial();
+                        } catch (error) {
+                            console.error('Error sending connect command:', error);
+                            updateStatus('Error sending connect command');
+                        }
+                    }, 2000); // Adjust delay as needed
+                } catch (error) {
+                    console.error('Connection error:', error);
+                    updateStatus('Connection failed');
+                }
+            } else {
+                alert('Web Serial API not supported in this browser.');
+            }
+        }
+        
+        // Function to disconnect from the serial port
+        async function disconnectSerial() {
+            if (port && port.writable) {
+                try {
+                    writer = port.writable.getWriter();
+                    await writer.write(new TextEncoder().encode('d\n')); // Send 'd' command
+                    writer.releaseLock();
+                    writer = null;
+        
+                    // Set keepReading to false to stop the read loop
+                    keepReading = false;
+        
+                    // Wait for all data to be read before closing the port
+                    setTimeout(async () => {
+                        if (reader) {
+                            await reader.cancel(); // This will release the lock
+                            reader = null;
+                        }
+        
+                        await port.close(); // Close the port
+                        port = null;
+        
+                        // Reset the UI buttons
+                        document.getElementById('disconnect').disabled = true;
+                        document.getElementById('connect').disabled = false;
+                        document.getElementById('playButton').disabled = true;
+                        document.getElementById('pauseButton').disabled = true;
+                        document.getElementById('stopButton').disabled = true;
+
+                        // Clear the progress output and reset the progress bar
+                        hideProgress()    
+        
+                        // The status will be updated by the readSerial function upon receiving the "Disconnect received" message
+                    }, 500); // Adjust delay as needed
+                } catch (error) {
+                    console.error('Error during disconnect:', error);
+                    updateStatus('Disconnect failed');
+                }
+            }        
+        }
+        
+        // Function to write data to the serial port
+        async function writeSerial(data) {
+            if (port && port.writable) {
+                writer = port.writable.getWriter();
+                const dataBuffer = new TextEncoder().encode(data + '\n');
+                console.log(`Writing to serial: ${data}`); // Debug log
+                await writer.write(dataBuffer);
+                writer.releaseLock();
+            } else {
+                console.error('Port not writable or not open.'); // Debug error
+            }
+        }
+
+        // Function to read data from the serial port
+        async function readSerial() {
+            while (port && port.readable && keepReading) {
+                reader = port.readable.getReader();
+                try {
+                    while (true) {
+                        const { value, done } = await reader.read();
+                        if (done) {
+                            break;
+                        }
+                        let text = new TextDecoder().decode(value);
+                        console.log(`Received: ${text}`);
+
+                        // Append the current text to lastText
+                        lastText += text;
+
+                        // Check if lastText contains the end marker '##'
+                        if (lastText.includes('##')) {
+                            // Split the complete message into parts and process each part
+                            let parts = lastText.split('##');
+                            for (let i = 0; i < parts.length - 1; i++) {
+                                let part = parts[i].trim(); // Trim each part to remove extra whitespace
+                                // Process each part as a complete message
+                                if (part.startsWith('<') && part.endsWith('>')) {
+                                    let extractedText = part.substring(1, part.length - 1);
+                                    updateResultsTable(extractedText);
+                                } else if (part.startsWith('|') && part.endsWith('|')) {
+                                    let progressText = part.substring(1, part.length - 1);
+                                    updateProgressOutput(progressText);
+                                } else {
+                                    updateStatus(part);
+                                }
+                            }
+                            // Set lastText to the remaining unprocessed text (if any)
+                            lastText = parts[parts.length - 1];
+                        }
+                    }
+                } catch (error) {
+                    console.error('Read error:', error);
+                } finally {
+                    if (reader) {
+                        reader.releaseLock();
+                    }
+                }
+            }
+        }
+
+        // Function to send test parameters to the Arduino
+        async function sendPlayCommand() {
+            if (!(state == "PAUSE")) { // If the state is not paused, then send the play command
+                // Get the test parameters from the UI
+                let direction = document.getElementById('directionToggle').textContent === "Forward" ? '1' : '-1';
+                let speed = document.getElementById('speedInput').value;
+                let kFactor = document.getElementById('kInput').value;
+                let flow = document.getElementById('flowInput').value;
+                
+                // Format the parameters as a comma-separated string
+                let parameters = `${direction},${speed},${kFactor},${flow}`;
+                
+                // Send the parameters to the Arduino
+                await writeSerial(parameters);
+            }
+            await writeSerial('s'); // Start test command
+
+            document.getElementById('playButton').disabled = true;
+            document.getElementById('pauseButton').disabled = false;
+            document.getElementById('stopButton').disabled = false;
+        }
+
+        // Send the pause command to the Arduino
+        async function sendPauseCommand() {
+            try {
+                await writeSerial('p');
+            } catch (error) {
+                console.error('Error sending pause command:', error);
+                updateStatus('Error sending pause command');
+            }
+
+            document.getElementById('playButton').disabled = false;
+            document.getElementById('pauseButton').disabled = true;
+            document.getElementById('stopButton').disabled = false;
+        }
+
+        // Send the stop command to the Arduino
+        async function sendStopCommand() {
+            try {
+                await writeSerial('t');
+            } catch (error) {
+                console.error('Error sending stop command:', error);
+                updateStatus('Error sending stop command');
+            }
+
+            document.getElementById('playButton').disabled = false;
+            document.getElementById('pauseButton').disabled = true;
+            document.getElementById('stopButton').disabled = true;
+        }
+            
+
+        
+        // Function to toggle motor direction
+        function toggleDirection() {
+            let directionButton = document.getElementById('directionToggle');
+            if (directionButton.textContent === "Forward") {
+                directionButton.textContent = "Backward";
+            } else {
+                directionButton.textContent = "Forward";
+            }
+}
+
+        // Function for increase speed button
+        function increaseSpeed() {
+            const speedInput = document.getElementById('speedInput');
+            let speedValue = parseInt(speedInput.value);
+            speedValue = Math.min(speedValue + 1, 100); // Increase speed, maximum of 100%
+            speedInput.value = speedValue;
+            updateSpeedValue(speedValue); // Update display and slider position
+        }
+
+        // Function for decrease speed button
+        function decreaseSpeed() {
+            const speedInput = document.getElementById('speedInput');
+            let speedValue = parseInt(speedInput.value);
+            speedValue = Math.max(speedValue - 1, 0); // Decrease speed, minimum of 0%
+            speedInput.value = speedValue;
+            updateSpeedValue(speedValue); // Update display and slider position
+        }
+
+        // Function for speed slider
+        function updateSpeedValue(value) {
+            document.getElementById('speedValue').textContent = value + '%'; // The '%' is already included in the span
+            // Send updated speed to Arduino if test is running
+            if (state === "PLAY" || state === "PAUSE") {
+                let direction = document.getElementById('directionToggle').textContent === "Forward" ? '1' : '-1';
+                let kFactor = document.getElementById('kInput').value;
+                let flow = document.getElementById('flowInput').value;
+                let parameters = `${direction},${value},${kFactor},${flow}`;
+                writeSerial(parameters);
+            }
+        }
+
+
+
+        // Update the UI with the status of the connection or test
+        function updateStatus(message) {
+            const statusOutput = document.getElementById('statusOutput');
+            if (statusOutput) {
+                statusOutput.textContent = message; // Update the text content of the status output element
+            }
+        }
+
+        // Update the UI with the progress of the test
+        function updateProgressOutput(message) {
+            const progressContainer = document.getElementById('progressContainer');
+            const progressBar = document.getElementById('progressBar');
+            const progressOutput = document.getElementById('progressOutput');
+
+            // Make the progress container visible
+            progressContainer.style.display = 'block';
+
+            if (progressOutput && progressBar) {
+                console.log('Progress message:', message); // Log the raw message for debugging
+
+                // Directly display the Arduino output
+                progressOutput.textContent = message;
+
+                // Attempt to extract the flow information for progress bar update
+                const flowPattern = /(\d+\.?\d*)\/(\d+\.?\d*)cc/;
+                const flowMatch = message.match(flowPattern);
+
+                if (flowMatch && flowMatch.length === 3) {
+                    const currentFlow = parseFloat(flowMatch[1]);
+                    const totalFlow = parseFloat(flowMatch[2]);
+
+                    // Calculate progress as a percentage
+                    const progressPercentage = Math.min((currentFlow / totalFlow) * 100, 100);
+
+                    // Update progress bar width based on the extracted flow rate
+                    progressBar.style.width = `${progressPercentage}%`;
+                }
+            }
+        }
+
+
+
+        // Function to hide the progress container
+        function hideProgress() {
+            document.getElementById('progressContainer').style.display = 'none';
+            const progressOutput = document.getElementById('progressOutput');
+            const progressBar = document.getElementById('progressBar');
+            if (progressOutput && progressBar) {
+                progressOutput.textContent = '';
+                progressBar.style.width = '0%';
+            }
+        }
+  
+        // Function to update the results table with data from the Arduino
+        function updateResultsTable(result) {
+            // Retrieve step value for k-factor and calculate decimal places
+            const kFactorStep = document.getElementById('kInput').step;
+            const decimalPlaces = (kFactorStep.split('.')[1] || []).length;
+
+            state = "IDLE";
+            document.getElementById('playButton').disabled = false;
+            document.getElementById('pauseButton').disabled = true;
+            document.getElementById('stopButton').disabled = true;
+
+            hideProgress()
+
+            if (!isRecordingEnabled) return; // Exit the function if recording is not enabled
+
+            const table = document.getElementById('resultsTable');
+            const newRow = table.insertRow(-1);
+            const testNumberCell = newRow.insertCell(0);
+            const directionCell = newRow.insertCell(1);
+            const speedCell = newRow.insertCell(2);
+            const kCell = newRow.insertCell(3);
+            const pulseCell = newRow.insertCell(4);
+            const flowCell = newRow.insertCell(5);
+            const timeCell = newRow.insertCell(6);
+
+            const parts = result.split(',');
+            testNumberCell.textContent = ++testNumber; // Increment test number for display
+            directionCell.textContent = parts[0] === '1' ? 'Forward' : parts[0] === '-1' ? 'Backward' : 'Aborted';
+            speedCell.textContent = parts[1];
+            // Format k-factor value with the same number of decimal places as its step
+            kCell.textContent = parseFloat(parts[2]).toFixed(decimalPlaces); 
+            pulseCell.textContent = parts[3];
+            flowCell.textContent = parts[4];
+            timeCell.textContent = parts[5];
+        }
+
+        // Function to export results from the table into a downloaded CSV file
+        function exportTableToCSV() {
+            const table = document.getElementById('resultsTable'); // Reference to your results table
+            let csvContent = "data:text/csv;charset=utf-8,";
+        
+            // Loop through each row of the table
+            for (let i = 0; i < table.rows.length; i++) {
+                let row = table.rows[i];
+                let rowData = [];
+        
+                // Loop through each cell of the row
+                for (let j = 0; j < row.cells.length; j++) {
+                    // Add cell data to the rowData array, ensuring to escape any commas or double-quotes
+                    rowData.push('"' + row.cells[j].innerText.replace(/"/g, '""') + '"');
+                }
+        
+                // Join rowData array as a single CSV string and add a newline character to end the row
+                csvContent += rowData.join(",") + "\r\n";
+            }
+        
+            // Encode the CSV content so it can be used in a URI
+            const encodedUri = encodeURI(csvContent);
+            // Create a temporary anchor tag to initiate the download
+            const link = document.createElement("a");
+            link.setAttribute("href", encodedUri);
+            link.setAttribute("download", "test_results.csv");
+            document.body.appendChild(link); // Required for Firefox
+            link.click(); // Trigger the download
+            document.body.removeChild(link); // Clean up
+        }
+    </script>
+</body>
+</html>
