@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Serial Data Reader</title>
+</head>
+<body>
+<button id="connect">Connect to Serial Device</button>
+<div id="data">Serial Data Will Display Here</div>
+
+<script>
+  const connectButton = document.getElementById('connect');
+  const dataContainer = document.getElementById('data');
+
+  async function connectSerial() {
+    if ('serial' in navigator) {
+      try {
+        // Prompt user to select any serial port.
+        const port = await navigator.serial.requestPort();
+        // Wait for the port to open.
+        await port.open({ baudRate: 9600 });
+        
+        // Read data from the serial port.
+        const reader = port.readable.getReader();
+        
+        // Listen to data coming from the serial device.
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) {
+            // Allow the serial port to be closed later.
+            reader.releaseLock();
+            break;
+          }
+          // Convert the Uint8Array to a string.
+          const textDecoder = new TextDecoder();
+          const text = textDecoder.decode(value);
+          // Display the data in the HTML.
+          dataContainer.textContent += text;
+        }
+      } catch (err) {
+        // Handle error - e.g., user didn't select a port.
+        console.error('There was an error opening the serial port:', err);
+      }
+    } else {
+      console.error('Web Serial API not supported.');
+    }
+  }
+
+  connectButton.addEventListener('click', connectSerial);
+</script>
+</body>
+</html>
